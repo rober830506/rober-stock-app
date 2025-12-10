@@ -11,7 +11,6 @@ st.sidebar.header("⚙️ 參數設定")
 # 1. 取得大盤資訊 (加權指數 ^TWII)
 try:
     twii = yf.Ticker("^TWII")
-    # 抓取最近 3 個月的資料來計算月線
     hist = twii.history(period="3mo")
     
     if len(hist) > 20:
@@ -39,35 +38,46 @@ except Exception as e:
 # 2. 股票代號輸入
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔎 輸入股票代號")
-default_tickers = "2330, 2603, 3231, 2317, 3035"
+default_tickers = "2330, 2603, 3231, 8069, 8358"
 user_input = st.sidebar.text_area("請輸入代號 (用逗號分隔)", default_tickers)
 
-# --- 核心邏輯函數 ---
+# --- 核心邏輯函數 (升級版：自動偵測上市/上櫃) ---
 def analyze_stock(ticker):
-    # 處理代號，加上 .TW
-    stock_id = ticker.strip()
-    if not stock_id.endswith('.TW'):
-        stock_id = stock_id + '.TW'
+    raw_id = ticker.strip()
+    # 嘗試兩種後綴：先試 .TW (上市), 再試 .TWO (上櫃)
+    suffixes = ['.TW', '.TWO']
     
+    stock_data = None
+    final_id = ""
+    
+    for suffix in suffixes:
+        try:
+            temp_id = raw_id + suffix
+            stock = yf.Ticker(temp_id)
+            df = stock.history(period="5d")
+            
+            if len(df) > 0:
+                stock_data = df
+                final_id = temp_id
+                break # 找到了就跳出迴圈
+        except:
+            continue
+            
+    # 如果試了兩種都沒資料，就回傳 None
+    if stock_data is None:
+        return None
+
+    # --- 開始分析 ---
     try:
-        stock = yf.Ticker(stock_id)
-        # 取得即時/今日資料
-        df = stock.history(period="5d")
-        
-        if len(df) < 1:
-            return None
-        
-        price = df['Close'].iloc[-1]
-        # 成交量 (有些資料源是股數，這裡除以1000換算成張數)
-        volume_share = df['Volume'].iloc[-1] 
+        price = stock_data['Close'].iloc[-1]
+        volume_share = stock_data['Volume'].iloc[-1] 
         volume = volume_share / 1000 # 換算成張
         
         # 判斷流動性燈號 (羅伯 SOP v3.3)
         liquidity = "未知"
         tactics = "觀察"
-        color = "⚪" # 預設白燈
+        color = "⚪"
         
-        # 邏輯判斷
         if price < 50: # 銅板股
             if volume < 3000:
                 color = "🩸"
@@ -77,7 +87,7 @@ def analyze_stock(ticker):
                 color = "🟡"
                 liquidity = "正常"
                 tactics = "波段"
-            else: # > 10000
+            else:
                 color = "🟢"
                 liquidity = "高流動"
                 tactics = "狼性追擊"
@@ -91,12 +101,12 @@ def analyze_stock(ticker):
                 color = "🟡"
                 liquidity = "正常"
                 tactics = "波段"
-            else: # > 3000
+            else:
                 color = "🟢"
                 liquidity = "高流動"
                 tactics = "狼性追擊"
                 
-        else: # 千金股/高價股 (Price >= 1000)
+        else: # 千金股
             if volume < 300:
                 color = "🩸"
                 liquidity = "低流動 (危險)"
@@ -105,13 +115,13 @@ def analyze_stock(ticker):
                 color = "🟡"
                 liquidity = "正常"
                 tactics = "波段"
-            else: # > 800
+            else:
                 color = "🟢"
                 liquidity = "高流動"
                 tactics = "狼性追擊"
 
         return {
-            "代號": ticker.strip(),
+            "代號": raw_id, # 顯示原始輸入的代號就好
             "股價": f"{price:.2f}",
             "成交量(張)": f"{int(volume):,}",
             "燈號": color,
@@ -136,17 +146,23 @@ if st.button("開始掃描"):
     tickers = user_input.split(',')
     results = []
     
+    # 進度條
     progress_bar = st.progress(0)
+    status_text = st.empty()
     
     for i, ticker in enumerate(tickers):
-        if ticker.strip():
-            data = analyze_stock(ticker)
+        clean_ticker = ticker.strip()
+        if clean_ticker:
+            status_text.text(f"正在掃描: {clean_ticker} ...")
+            data = analyze_stock(clean_ticker)
             if data:
                 results.append(data)
         progress_bar.progress((i + 1) / len(tickers))
+    
+    status_text.empty() # 清除狀態文字
         
     if results:
         df_res = pd.DataFrame(results)
         st.table(df_res)
     else:
-        st.warning("查無資料，請檢查代號是否正確。")
+        st.warning("查無資料，請確認代號是否正確。")
