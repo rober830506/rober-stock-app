@@ -3,24 +3,41 @@ import yfinance as yf
 import pandas as pd
 
 # --- 設定網頁標題 ---
-st.set_page_config(page_title="羅伯長官選股雷達", layout="wide")
+st.set_page_config(page_title="羅伯長官選股雷達 v2.1", layout="wide")
+
+# --- 戰區清單 (V2.1 全面擴充版) ---
+SECTOR_LISTS = {
+    "🔹 自選模式 (手動輸入)": [], 
+    
+    "🔥 AI 伺服器與組裝 (代工五哥)": "2382, 3231, 2356, 6669, 2376, 2301, 2317, 2421",
+    
+    "⚡ PCB 與銅箔基板 (AI 高速傳輸)": "2383, 6274, 6213, 3037, 2368, 2313, 3044, 8046, 3189, 4958",
+    
+    "🛠️ CoWoS 與儀器設備 (AI 軍火庫)": "3131, 3583, 3680, 6187, 2404, 5443, 6640, 3413, 6196, 3587",
+    
+    "🔌 重電與電纜 (能源缺口概念)": "1513, 1519, 1503, 1514, 1605, 1609, 1603, 1616, 6806",
+    
+    "✈️ 軍工與無人機 (國防自主)": "8033, 2634, 2645, 5284, 8222, 4572, 2630, 3005",
+    
+    "🚢 散裝航運 (BDI 指數)": "2606, 2637, 2605, 2612, 5608, 2641, 2614",
+    
+    "📦 貨櫃航運 (航海王)": "2603, 2609, 2615",
+    
+    "🏆 台灣 50 (權值護盤軍)": "2330, 2317, 2454, 2308, 2881, 2412, 2303, 2882, 1216, 2002"
+}
 
 # --- 側邊欄：設定與輸入 ---
-st.sidebar.header("⚙️ 參數設定")
+st.sidebar.header("⚙️ 戰術控制台")
 
-# 1. 取得大盤資訊 (加權指數 ^TWII)
+# 1. 大盤資訊
 try:
     twii = yf.Ticker("^TWII")
     hist = twii.history(period="3mo")
-    
     if len(hist) > 20:
         current_price = hist['Close'].iloc[-1]
         ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-        
-        st.sidebar.markdown("### 📊 大盤 (加權指數)")
-        st.sidebar.write(f"目前點數: {current_price:.2f}")
-        st.sidebar.write(f"月線 (20MA): {ma20:.2f}")
-        
+        st.sidebar.markdown(f"### 📊 加權指數: {current_price:.0f}")
+        st.sidebar.markdown(f"月線 (20MA): {ma20:.0f}")
         if current_price > ma20:
             market_status = "BULL"
             st.sidebar.success("🔥 多頭趨勢，積極操作")
@@ -28,141 +45,119 @@ try:
             market_status = "BEAR"
             st.sidebar.error("⚠️ 空頭趨勢，保守操作")
     else:
-        st.sidebar.warning("無法取得足夠的大盤資料")
         market_status = "UNKNOWN"
-
-except Exception as e:
-    st.sidebar.error(f"大盤資料讀取失敗: {e}")
+except:
+    st.sidebar.warning("無法連線大盤")
     market_status = "UNKNOWN"
 
-# 2. 股票代號輸入
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔎 輸入股票代號")
-default_tickers = "2330, 2603, 3231, 8069, 8358"
-user_input = st.sidebar.text_area("請輸入代號 (用逗號分隔)", default_tickers)
 
-# --- 核心邏輯函數 (升級版：自動偵測上市/上櫃) ---
+# 2. 戰區選擇
+st.sidebar.subheader("🎯 選擇掃描戰區")
+selected_sector = st.sidebar.selectbox("請選擇清單：", list(SECTOR_LISTS.keys()))
+
+# 根據選擇自動填入代碼
+if "自選" in selected_sector:
+    default_text = "2330, 3231, 8069"
+    user_input = st.sidebar.text_area("輸入代號 (逗號分隔)", default_text, height=150)
+    target_list = user_input
+else:
+    # 顯示該戰區的股票，並允許長官手動增減
+    default_text = SECTOR_LISTS[selected_sector]
+    user_input = st.sidebar.text_area("戰區名單 (可手動修改)", default_text, height=150)
+    target_list = user_input
+
+# --- 核心邏輯 (SOP v3.3 + 上市櫃自動判斷) ---
 def analyze_stock(ticker):
     raw_id = ticker.strip()
-    # 嘗試兩種後綴：先試 .TW (上市), 再試 .TWO (上櫃)
-    suffixes = ['.TW', '.TWO']
+    if not raw_id: return None
     
+    # 自動偵測 .TW 或 .TWO
+    suffixes = ['.TW', '.TWO']
     stock_data = None
-    final_id = ""
     
     for suffix in suffixes:
         try:
             temp_id = raw_id + suffix
             stock = yf.Ticker(temp_id)
             df = stock.history(period="5d")
-            
             if len(df) > 0:
                 stock_data = df
-                final_id = temp_id
-                break # 找到了就跳出迴圈
+                break
         except:
             continue
             
-    # 如果試了兩種都沒資料，就回傳 None
-    if stock_data is None:
-        return None
+    if stock_data is None: return None
 
-    # --- 開始分析 ---
     try:
         price = stock_data['Close'].iloc[-1]
-        volume_share = stock_data['Volume'].iloc[-1] 
-        volume = volume_share / 1000 # 換算成張
+        vol_share = stock_data['Volume'].iloc[-1] 
+        volume = vol_share / 1000 
         
-        # 判斷流動性燈號 (羅伯 SOP v3.3)
+        # SOP v3.3 燈號邏輯
+        color = "⚪"
         liquidity = "未知"
         tactics = "觀察"
-        color = "⚪"
         
-        if price < 50: # 銅板股
-            if volume < 3000:
-                color = "🩸"
-                liquidity = "低流動 (垃圾)"
-                tactics = "刪除"
-            elif 3000 <= volume < 10000:
-                color = "🟡"
-                liquidity = "正常"
-                tactics = "波段"
-            else:
-                color = "🟢"
-                liquidity = "高流動"
-                tactics = "狼性追擊"
-                
-        elif 50 <= price < 1000: # 中高價股
-            if volume < 1000:
-                color = "🩸"
-                liquidity = "低流動 (危險)"
-                tactics = "刪除"
-            elif 1000 <= volume < 3000:
-                color = "🟡"
-                liquidity = "正常"
-                tactics = "波段"
-            else:
-                color = "🟢"
-                liquidity = "高流動"
-                tactics = "狼性追擊"
-                
-        else: # 千金股
-            if volume < 300:
-                color = "🩸"
-                liquidity = "低流動 (危險)"
-                tactics = "刪除"
-            elif 300 <= volume < 800:
-                color = "🟡"
-                liquidity = "正常"
-                tactics = "波段"
-            else:
-                color = "🟢"
-                liquidity = "高流動"
-                tactics = "狼性追擊"
+        if price < 50:
+            if volume < 3000: color, liquidity, tactics = "🩸", "低流動(垃圾)", "刪除"
+            elif volume < 10000: color, liquidity, tactics = "🟡", "正常", "波段"
+            else: color, liquidity, tactics = "🟢", "高流動", "狼性追擊"
+        elif price < 1000:
+            if volume < 1000: color, liquidity, tactics = "🩸", "低流動(危險)", "刪除"
+            elif volume < 3000: color, liquidity, tactics = "🟡", "正常", "波段"
+            else: color, liquidity, tactics = "🟢", "高流動", "狼性追擊"
+        else:
+            if volume < 300: color, liquidity, tactics = "🩸", "低流動(危險)", "刪除"
+            elif volume < 800: color, liquidity, tactics = "🟡", "正常", "波段"
+            else: color, liquidity, tactics = "🟢", "高流動", "狼性追擊"
 
         return {
-            "代號": raw_id, # 顯示原始輸入的代號就好
-            "股價": f"{price:.2f}",
-            "成交量(張)": f"{int(volume):,}",
+            "代號": raw_id,
+            "股價": price, 
+            "成交量": int(volume),
             "燈號": color,
-            "流動性狀態": liquidity,
-            "戰術建議": tactics
+            "狀態": liquidity,
+            "戰術": tactics
         }
-
-    except Exception as e:
+    except:
         return None
 
-# --- 主畫面顯示 ---
-st.title("🚀 羅伯長官的台股戰情室")
+# --- 主畫面 ---
+st.title(f"🚀 羅伯長官戰情室 - {selected_sector.split(' ')[1]}") # 只顯示名稱部分
 
-if market_status == "BEAR":
-    st.error("🚨 警告：目前大盤位於月線之下，屬於空頭趨勢，請嚴格控制部位！")
-elif market_status == "BULL":
-    st.success("🌈 提示：目前大盤位於月線之上，多頭趨勢，可積極選股。")
-
-st.markdown("### 📋 掃描結果")
-
-if st.button("開始掃描"):
-    tickers = user_input.split(',')
+if st.button("🚀 啟動雷達掃描", type="primary"):
+    tickers = target_list.split(',')
     results = []
     
     # 進度條
-    progress_bar = st.progress(0)
+    my_bar = st.progress(0)
     status_text = st.empty()
     
     for i, ticker in enumerate(tickers):
         clean_ticker = ticker.strip()
         if clean_ticker:
-            status_text.text(f"正在掃描: {clean_ticker} ...")
+            status_text.text(f"正在鎖定目標: {clean_ticker} ...")
             data = analyze_stock(clean_ticker)
             if data:
                 results.append(data)
-        progress_bar.progress((i + 1) / len(tickers))
+        my_bar.progress((i + 1) / len(tickers))
     
-    status_text.empty() # 清除狀態文字
+    status_text.empty()
+    my_bar.empty()
         
     if results:
-        df_res = pd.DataFrame(results)
-        st.table(df_res)
+        df = pd.DataFrame(results)
+        # 排序：優先顯示「高流動」的狼性目標
+        # 我們加個權重排序：高流動(3) > 正常(2) > 低流動(1)
+        sort_map = {"高流動": 3, "正常": 2, "低流動(垃圾)": 1, "低流動(危險)": 1, "未知": 0}
+        df['權重'] = df['狀態'].map(lambda x: sort_map.get(x, 0))
+        df = df.sort_values(by=['權重', '成交量'], ascending=[False, False]).drop(columns=['權重'])
+
+        st.dataframe(
+            df.style.format({"股價": "{:.2f}", "成交量": "{:,}"}),
+            height=600,
+            use_container_width=True
+        )
     else:
-        st.warning("查無資料，請確認代號是否正確。")
+        st.warning("⚠️ 掃描完畢，無有效目標。")
